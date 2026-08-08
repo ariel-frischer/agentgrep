@@ -2,6 +2,7 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 #[derive(Debug, Clone)]
 pub struct SearchScope<'a> {
@@ -16,6 +17,28 @@ pub struct SearchScope<'a> {
 pub struct FileEntry {
     pub path: PathBuf,
     pub relative_path: String,
+}
+
+/// The discoverable paths for one traversal policy, plus cheap evidence that
+/// the traversal inputs have not changed. Contents are deliberately absent.
+#[derive(Debug, Clone)]
+pub struct FileInventory {
+    pub entries: Vec<FileEntry>,
+    pub freshness: FreshnessManifest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FreshnessManifest {
+    pub root: FileStamp,
+    pub directories: Vec<(PathBuf, FileStamp)>,
+    pub policy_files: Vec<(PathBuf, FileStamp)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileStamp {
+    pub modified: Option<SystemTime>,
+    pub len: u64,
+    pub is_dir: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +89,61 @@ pub fn collect_file_entries(scope: &SearchScope<'_>) -> Vec<FileEntry> {
     }
 
     files
+}
+
+pub fn collect_file_inventory(scope: &SearchScope<'_>) -> FileInventory {
+    let entries = collect_file_entries(scope);
+    let mut directories = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(scope.root.to_path_buf());
+    for entry in &entries {
+        let mut current = entry.path.parent();
+        while let Some(dir) = current {
+            if !dir.starts_with(scope.root) || !seen.insert(dir.to_path_buf()) {
+                break;
+            }
+            current = dir.parent();
+        }
+    }
+    for dir in seen {
+        if let Some(stamp) = file_stamp(&dir) {
+            directories.push((dir, stamp));
+        }
+    }
+    directories.sort_by(|a, b| a.0.cmp(&b.0));
+    let policy_files = policy_paths(scope.root)
+        .into_iter()
+        .filter_map(|path| file_stamp(&path).map(|stamp| (path, stamp)))
+        .collect();
+    FileInventory {
+        entries,
+        freshness: FreshnessManifest {
+            root: file_stamp(scope.root).unwrap_or(FileStamp { modified: None, len: 0, is_dir: true }),
+            directories,
+            policy_files,
+        },
+    }
+}
+
+pub fn inventory_is_fresh(root: &Path, manifest: &FreshnessManifest) -> bool {
+    file_stamp(root) == Some(manifest.root.clone())
+        && manifest.directories.iter().all(|(path, stamp)| file_stamp(path) == Some(stamp.clone()))
+        && policy_paths(root).into_iter().filter_map(|path| file_stamp(&path).map(|stamp| (path, stamp))).collect::<Vec<_>>() == manifest.policy_files
+}
+
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let metadata = fs::metadata(path).ok()?;
+    Some(FileStamp {
+        modified: metadata.modified().ok(),
+        len: metadata.len(),
+        is_dir: metadata.is_dir(),
+    })
+}
+
+fn policy_paths(root: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![root.join(".gitignore"), root.join(".ignore"), root.join(".rgignore")];
+    paths.push(root.join(".git/info/exclude"));
+    paths
 }
 
 pub fn read_text_file(path: &Path) -> Option<String> {

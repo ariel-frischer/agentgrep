@@ -1,6 +1,6 @@
 use crate::cli::FindArgs;
 use crate::structure::{FileStructure, StructureItem, extract_file_structure};
-use crate::workspace::{SearchScope, collect_file_entries, read_text_file};
+use crate::workspace::{FileEntry, SearchScope, collect_file_entries, read_text_file};
 use serde::Serialize;
 use std::path::Path;
 
@@ -28,10 +28,6 @@ pub struct FindStructure {
 }
 
 pub fn run_find(root: &Path, args: &FindArgs) -> FindResult {
-    let query = args.query_parts.join(" ");
-    let query_lower = query.to_ascii_lowercase();
-    let query_tokens = tokenize_query(&query);
-
     let scope = SearchScope {
         root,
         file_type: args.file_type.as_deref(),
@@ -40,8 +36,15 @@ pub fn run_find(root: &Path, args: &FindArgs) -> FindResult {
         no_ignore: args.no_ignore,
     };
 
+    run_find_with_inventory(root, args, &collect_file_entries(&scope))
+}
+
+pub fn run_find_with_inventory(root: &Path, args: &FindArgs, entries: &[FileEntry]) -> FindResult {
+    let query = args.query_parts.join(" ");
+    let query_lower = query.to_ascii_lowercase();
+    let query_tokens = tokenize_query(&query);
     let mut files = Vec::new();
-    for file in collect_file_entries(&scope) {
+    for file in entries {
         let relative_lower = file.relative_path.to_ascii_lowercase();
         if !has_path_evidence(&query_lower, &query_tokens, &relative_lower) {
             continue;
@@ -66,7 +69,7 @@ pub fn run_find(root: &Path, args: &FindArgs) -> FindResult {
         let omitted_count = structure.items.len().saturating_sub(shown_items.len());
 
         files.push(FindFile {
-            path: file.relative_path,
+            path: file.relative_path.clone(),
             role: structure.role.clone(),
             language: structure.language.clone(),
             score,
