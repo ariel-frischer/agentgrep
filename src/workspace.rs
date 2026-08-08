@@ -39,6 +39,7 @@ pub struct FileStamp {
     pub modified: Option<SystemTime>,
     pub len: u64,
     pub is_dir: bool,
+    pub content_digest: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -95,15 +96,9 @@ pub fn collect_file_inventory(scope: &SearchScope<'_>) -> FileInventory {
     let entries = collect_file_entries(scope);
     let mut directories = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    seen.insert(scope.root.to_path_buf());
-    for entry in &entries {
-        let mut current = entry.path.parent();
-        while let Some(dir) = current {
-            if !dir.starts_with(scope.root) || !seen.insert(dir.to_path_buf()) {
-                break;
-            }
-            current = dir.parent();
-        }
+    for result in WalkBuilder::new(scope.root).hidden(!scope.hidden).build() {
+        let Ok(entry) = result else { continue };
+        if entry.path().is_dir() { seen.insert(entry.path().to_path_buf()); }
     }
     for dir in seen {
         if let Some(stamp) = file_stamp(&dir) {
@@ -118,7 +113,7 @@ pub fn collect_file_inventory(scope: &SearchScope<'_>) -> FileInventory {
     FileInventory {
         entries,
         freshness: FreshnessManifest {
-            root: file_stamp(scope.root).unwrap_or(FileStamp { modified: None, len: 0, is_dir: true }),
+            root: file_stamp(scope.root).unwrap_or(FileStamp { modified: None, len: 0, is_dir: true, content_digest: 0 }),
             directories,
             policy_files,
         },
@@ -137,6 +132,14 @@ fn file_stamp(path: &Path) -> Option<FileStamp> {
         modified: metadata.modified().ok(),
         len: metadata.len(),
         is_dir: metadata.is_dir(),
+        content_digest: if metadata.is_file() { digest_file(path) } else { 0 },
+    })
+}
+
+fn digest_file(path: &Path) -> u64 {
+    let Ok(bytes) = fs::read(path) else { return 0 };
+    bytes.iter().fold(1469598103934665603u64, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(1099511628211)
     })
 }
 
