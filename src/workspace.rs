@@ -132,13 +132,24 @@ fn file_stamp(path: &Path) -> Option<FileStamp> {
         modified: metadata.modified().ok(),
         len: metadata.len(),
         is_dir: metadata.is_dir(),
-        content_digest: if metadata.is_file() { digest_file(path) } else { 0 },
+        content_digest: if metadata.is_file() { digest_file(path) } else { digest_directory(path) },
     })
 }
 
 fn digest_file(path: &Path) -> u64 {
     let Ok(bytes) = fs::read(path) else { return 0 };
     bytes.iter().fold(1469598103934665603u64, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(1099511628211)
+    })
+}
+
+fn digest_directory(path: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(path) else { return 0 };
+    let mut names = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.file_name().to_string_lossy().into_owned()))
+        .collect::<Vec<_>>();
+    names.sort();
+    names.iter().flat_map(|name| name.as_bytes()).fold(1469598103934665603u64, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(1099511628211)
     })
 }
