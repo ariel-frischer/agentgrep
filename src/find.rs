@@ -1,9 +1,9 @@
 use crate::cli::FindArgs;
 use crate::structure::{FileStructure, StructureItem, extract_file_structure};
 use crate::workspace::{FileEntry, SearchScope, collect_file_entries, read_text_file};
+use globset::{Glob, GlobSetBuilder};
 use serde::Serialize;
 use std::path::Path;
-use globset::{Glob, GlobSetBuilder};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FindResult {
@@ -102,11 +102,18 @@ fn matches_request(file: &FileEntry, args: &FindArgs) -> bool {
             return false;
         }
     }
-    let Some(glob) = args.glob.as_deref() else { return true };
+    let Some(glob) = args.glob.as_deref() else {
+        return true;
+    };
     let mut builder = GlobSetBuilder::new();
-    let Ok(glob) = Glob::new(glob) else { return false };
+    let Ok(glob) = Glob::new(glob) else {
+        return false;
+    };
     builder.add(glob);
-    builder.build().map(|set| set.is_match(&file.relative_path)).unwrap_or(false)
+    builder
+        .build()
+        .map(|set| set.is_match(&file.relative_path))
+        .unwrap_or(false)
 }
 
 fn has_path_evidence(query_lower: &str, query_tokens: &[String], relative_lower: &str) -> bool {

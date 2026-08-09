@@ -98,7 +98,9 @@ pub fn collect_file_inventory(scope: &SearchScope<'_>) -> FileInventory {
     let mut seen = std::collections::HashSet::new();
     for result in WalkBuilder::new(scope.root).hidden(!scope.hidden).build() {
         let Ok(entry) = result else { continue };
-        if entry.path().is_dir() { seen.insert(entry.path().to_path_buf()); }
+        if entry.path().is_dir() {
+            seen.insert(entry.path().to_path_buf());
+        }
     }
     for dir in seen {
         if let Some(stamp) = file_stamp(&dir) {
@@ -113,7 +115,12 @@ pub fn collect_file_inventory(scope: &SearchScope<'_>) -> FileInventory {
     FileInventory {
         entries,
         freshness: FreshnessManifest {
-            root: file_stamp(scope.root).unwrap_or(FileStamp { modified: None, len: 0, is_dir: true, content_digest: 0 }),
+            root: file_stamp(scope.root).unwrap_or(FileStamp {
+                modified: None,
+                len: 0,
+                is_dir: true,
+                content_digest: 0,
+            }),
             directories,
             policy_files,
         },
@@ -122,8 +129,15 @@ pub fn collect_file_inventory(scope: &SearchScope<'_>) -> FileInventory {
 
 pub fn inventory_is_fresh(root: &Path, manifest: &FreshnessManifest) -> bool {
     file_stamp(root) == Some(manifest.root.clone())
-        && manifest.directories.iter().all(|(path, stamp)| file_stamp(path) == Some(stamp.clone()))
-        && policy_paths(root).into_iter().filter_map(|path| file_stamp(&path).map(|stamp| (path, stamp))).collect::<Vec<_>>() == manifest.policy_files
+        && manifest
+            .directories
+            .iter()
+            .all(|(path, stamp)| file_stamp(path) == Some(stamp.clone()))
+        && policy_paths(root)
+            .into_iter()
+            .filter_map(|path| file_stamp(&path).map(|stamp| (path, stamp)))
+            .collect::<Vec<_>>()
+            == manifest.policy_files
 }
 
 fn file_stamp(path: &Path) -> Option<FileStamp> {
@@ -132,7 +146,11 @@ fn file_stamp(path: &Path) -> Option<FileStamp> {
         modified: metadata.modified().ok(),
         len: metadata.len(),
         is_dir: metadata.is_dir(),
-        content_digest: if metadata.is_file() { digest_file(path) } else { digest_directory(path) },
+        content_digest: if metadata.is_file() {
+            digest_file(path)
+        } else {
+            digest_directory(path)
+        },
     })
 }
 
@@ -144,19 +162,49 @@ fn digest_file(path: &Path) -> u64 {
 }
 
 fn digest_directory(path: &Path) -> u64 {
-    let Ok(entries) = fs::read_dir(path) else { return 0 };
+    let Ok(entries) = fs::read_dir(path) else {
+        return 0;
+    };
     let mut names = entries
-        .filter_map(|entry| entry.ok().map(|entry| entry.file_name().to_string_lossy().into_owned()))
+        .filter_map(|entry| {
+            entry
+                .ok()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        })
         .collect::<Vec<_>>();
     names.sort();
-    names.iter().flat_map(|name| name.as_bytes()).fold(1469598103934665603u64, |hash, byte| {
-        (hash ^ u64::from(*byte)).wrapping_mul(1099511628211)
-    })
+    names
+        .iter()
+        .flat_map(|name| name.as_bytes())
+        .fold(1469598103934665603u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(1099511628211)
+        })
 }
 
 fn policy_paths(root: &Path) -> Vec<PathBuf> {
-    let mut paths = vec![root.join(".gitignore"), root.join(".ignore"), root.join(".rgignore")];
+    let mut paths = Vec::new();
+    for result in WalkBuilder::new(root)
+        .hidden(true)
+        .standard_filters(false)
+        .build()
+    {
+        let Ok(entry) = result else { continue };
+        if entry.path().is_dir() {
+            paths.extend([
+                entry.path().join(".gitignore"),
+                entry.path().join(".ignore"),
+                entry.path().join(".rgignore"),
+            ]);
+        }
+    }
     paths.push(root.join(".git/info/exclude"));
+    if let Ok(global) = std::env::var("XDG_CONFIG_HOME") {
+        paths.push(PathBuf::from(global).join("git/ignore"));
+    } else if let Ok(home) = std::env::var("HOME") {
+        paths.push(PathBuf::from(home).join(".config/git/ignore"));
+    }
+    paths.sort();
+    paths.dedup();
     paths
 }
 
